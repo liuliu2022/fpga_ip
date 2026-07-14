@@ -20,7 +20,7 @@ edge_detector #(
 ) u_clear_pulse_gen (
     .clk        (S_AXI_ACLK),          // AXI 时钟
     .rst_n      (S_AXI_ARESETN),       // AXI 复位（低有效）
-    .sig_in     (slv_reg0[3:0]),       // 来自 AXI 写寄存器的电平信号
+    .sig_in     (sig_in),              // 来自 AXI 写寄存器的电平信号
     .pulse_out  (clear_pulse)          // 输出单周期脉冲
 );
 */
