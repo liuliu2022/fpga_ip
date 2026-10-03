@@ -1,0 +1,11 @@
+vectors/
+scenario_results/
+sim/xsim.dir/
+.Xil/
+scripts/synth_out/
+*.jou
+*.log
+*.pb
+*.str
+*.wdb
+*.dcp
