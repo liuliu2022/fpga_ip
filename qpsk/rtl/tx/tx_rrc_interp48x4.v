@@ -47,7 +47,9 @@ function signed [17:0] tx_rrc_coeff;
     begin
         coefficient_index = phase + 48*tap_index;
         case (coefficient_index)
+`define TX_RRC_COEFF_CASE_CONTEXT
 `include "tx_rrc_coeffs_case.vh"
+`undef TX_RRC_COEFF_CASE_CONTEXT
             default: tx_rrc_coeff = 18'sd0;
         endcase
     end
