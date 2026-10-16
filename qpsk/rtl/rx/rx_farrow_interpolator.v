@@ -11,6 +11,7 @@
 module rx_farrow_interpolator (
     input  wire                     clk,
     input  wire                     rst_n,
+    input  wire                     enable,
     input  wire                     in_valid,
     input  wire signed [15:0]       in_i,
     input  wire signed [15:0]       in_q,
@@ -79,7 +80,7 @@ function signed [15:0] sat16;
 endfunction
 
 always @(posedge clk) begin
-    if (!rst_n) begin
+    if (!rst_n || !enable) begin
         i_d1 <= 0; i_d2 <= 0; i_d3 <= 0;
         q_d1 <= 0; q_d2 <= 0; q_d3 <= 0;
         pending <= 1'b0; pending_mu <= 16'd0;

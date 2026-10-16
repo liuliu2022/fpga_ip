@@ -66,6 +66,20 @@ cd qpsk/sim
 
 脚本会重新生成 TX 系数和黄金向量，随后运行 TX 位精确仿真以及 TX→RX 回环。
 
+绕过 DDC、DMA 和 RTL 发射机，使用 MATLAB 独立生成的四路 I/Q 对完整
+接收机与解帧器做回归：
+
+```powershell
+cd qpsk/scripts
+./run_packet_iq_injection.ps1 `
+  -MatlabExe 'D:\matlab\R2020b\bin\matlab.exe' `
+  -VivadoBin 'F:\vivado_2022_02\Vivado\2022.2\bin'
+```
+
+该脚本依次验证无损基线、90 度载波模糊、频偏/定时偏差/时钟偏差/噪声
+同时存在的综合场景，以及 Costas 端平均 `|I|+|Q|=20` 的低幅度场景；
+每个用例都逐字节检查 64 字节 payload、Header CRC 和 CRC32。
+
 Vivado 2022.2 的 OOC 综合在部分 Windows 中文路径下可能以
 `TclStackFree: incorrect freePtr` 异常退出；综合/实现时请把仓库放在纯
 ASCII 路径中。相同代码在 ASCII 路径下已完成综合与时序验证。

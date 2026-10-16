@@ -26,7 +26,7 @@ reg signed [63:0] ref_timing_error;
 always #8.138020833 clk=~clk; // 61.44 MHz
 
 gowinsdr_rx_chain dut(
- .clk(clk),.rst_n(rst_n),.sample_valid(sample_valid),
+ .clk(clk),.rst_n(rst_n),.frame_sync(1'b0),.sample_valid(sample_valid),
  .sample_i0(sample_i0),.sample_q0(sample_q0),.sample_i1(sample_i1),.sample_q1(sample_q1),
  .sample_i2(sample_i2),.sample_q2(sample_q2),.sample_i3(sample_i3),.sample_q3(sample_q3),
  .decim_valid(decim_valid),.decim_i(decim_i),.decim_q(decim_q),
@@ -34,6 +34,7 @@ gowinsdr_rx_chain dut(
  .symbol_valid(symbol_valid),.symbol_i(symbol_i),.symbol_q(symbol_q),
  .decoded_data(decoded_data),.decoded_valid(decoded_valid),
  .costas_frequency_word(costas_frequency_word),.costas_phase_word(costas_phase_word),
+ .costas_locked(),.costas_recovery(),
  .timing_step(timing_step),.timing_error(timing_error)
 );
 

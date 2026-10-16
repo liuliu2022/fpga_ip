@@ -1,0 +1,16 @@
+# Local Codex and simulator working directories
+.codex_sim/
+.codex_tmp/
+xsim.dir/
+
+# Vivado/XSim transient files
+*.jou
+*.log
+*.pb
+*.str
+*.wdb
+*.backup.jou
+*.backup.log
+
+# Local distribution archives
+qpsk.zip

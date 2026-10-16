@@ -1,0 +1,9 @@
+profile=phase90
+phase_rad=1.57079632679
+cfo_hz=0
+amplitude_scale=1
+fractional_delay_samples=0
+sample_clock_ppm=0
+snr_db=Inf
+payload_bytes=64
+input_clocks=14784

@@ -1,6 +1,8 @@
 `timescale 1ns / 1ps
 
-module tb_full_phy_packet_loopback;
+module tb_full_phy_packet_loopback #(
+    parameter ROTATE_90 = 0
+);
 reg clk = 0;
 reg rst_n = 0;
 always #8.138 clk = ~clk;
@@ -15,6 +17,14 @@ wire tx_dibit_valid;
 wire tx_dibit_ready;
 wire [127:0] tx_iq;
 wire tx_iq_valid;
+wire signed [15:0] channel_i0 = ROTATE_90 ? -$signed(tx_iq[31:16])   : $signed(tx_iq[15:0]);
+wire signed [15:0] channel_q0 = ROTATE_90 ?  $signed(tx_iq[15:0])    : $signed(tx_iq[31:16]);
+wire signed [15:0] channel_i1 = ROTATE_90 ? -$signed(tx_iq[63:48])   : $signed(tx_iq[47:32]);
+wire signed [15:0] channel_q1 = ROTATE_90 ?  $signed(tx_iq[47:32])   : $signed(tx_iq[63:48]);
+wire signed [15:0] channel_i2 = ROTATE_90 ? -$signed(tx_iq[95:80])   : $signed(tx_iq[79:64]);
+wire signed [15:0] channel_q2 = ROTATE_90 ?  $signed(tx_iq[79:64])   : $signed(tx_iq[95:80]);
+wire signed [15:0] channel_i3 = ROTATE_90 ? -$signed(tx_iq[127:112]) : $signed(tx_iq[111:96]);
+wire signed [15:0] channel_q3 = ROTATE_90 ?  $signed(tx_iq[111:96])  : $signed(tx_iq[127:112]);
 wire [1:0] rx_dibit;
 wire rx_dibit_valid;
 wire [31:0] dma_rx_data;
@@ -24,6 +34,7 @@ wire dma_rx_valid;
 reg dma_rx_ready = 1;
 wire tx_frame_accepted, tx_frame_sent;
 wire sync_found, header_error, crc_error, frame_good;
+wire iq_swapped;
 wire [15:0] tx_frame_length, rx_frame_length;
 
 wire decim_valid, costas_valid, symbol_valid;
@@ -55,11 +66,12 @@ gowinsdr_tx_chain u_tx (
 );
 
 gowinsdr_rx_chain u_rx (
-    .clk(clk), .rst_n(rst_n), .sample_valid(tx_iq_valid),
-    .sample_i0(tx_iq[15:0]), .sample_q0(tx_iq[31:16]),
-    .sample_i1(tx_iq[47:32]), .sample_q1(tx_iq[63:48]),
-    .sample_i2(tx_iq[79:64]), .sample_q2(tx_iq[95:80]),
-    .sample_i3(tx_iq[111:96]), .sample_q3(tx_iq[127:112]),
+    .clk(clk), .rst_n(rst_n), .frame_sync(sync_found),
+    .sample_valid(tx_iq_valid),
+    .sample_i0(channel_i0), .sample_q0(channel_q0),
+    .sample_i1(channel_i1), .sample_q1(channel_q1),
+    .sample_i2(channel_i2), .sample_q2(channel_q2),
+    .sample_i3(channel_i3), .sample_q3(channel_q3),
     .decim_valid(decim_valid), .decim_i(decim_i), .decim_q(decim_q),
     .costas_valid(costas_valid), .costas_i(costas_i), .costas_q(costas_q),
     .symbol_valid(symbol_valid), .symbol_i(symbol_i), .symbol_q(symbol_q),
@@ -75,7 +87,7 @@ axis_rx_deframer #(.MAX_PAYLOAD(256), .WATCHDOG_CYCLES(100000)) u_deframer (
     .m_axis_tvalid(dma_rx_valid), .m_axis_tready(dma_rx_ready),
     .sync_found(sync_found), .header_error(header_error),
     .crc_error(crc_error), .frame_good(frame_good),
-    .frame_length(rx_frame_length)
+    .frame_length(rx_frame_length), .iq_swapped(iq_swapped)
 );
 
 task send_word;
@@ -112,7 +124,8 @@ initial begin
     repeat (20) @(posedge clk);
     if ((received_count == 64) && (errors == 0) &&
         (rx_frame_length == 64) && !header_error && !crc_error)
-        $display("PASS: DMA payload -> frame -> QPSK TX/RX -> deframe -> DMA payload");
+        $display("PASS: DMA payload -> frame -> QPSK TX/RX -> deframe -> DMA payload, rotate90=%0d iq_swapped=%0d",
+                 ROTATE_90, iq_swapped);
     else
         $display("FAIL: bytes=%0d errors=%0d length=%0d timeout_cycles=%0d",
                  received_count, errors, rx_frame_length, cycles);
@@ -131,4 +144,8 @@ always @(posedge clk) begin
     end
 end
 
+endmodule
+
+module tb_full_phy_packet_loopback_rot90;
+    tb_full_phy_packet_loopback #(.ROTATE_90(1)) u_rot90();
 endmodule

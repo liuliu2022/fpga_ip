@@ -9,6 +9,8 @@ module gowinsdr_rx_chain (
     (* X_INTERFACE_PARAMETER = "POLARITY ACTIVE_LOW" *)
     input  wire                     rst_n,
 
+    (* X_INTERFACE_IGNORE = "true" *) input wire frame_sync,
+
     (* X_INTERFACE_IGNORE = "true" *) input wire sample_valid,
     (* X_INTERFACE_IGNORE = "true" *) input wire signed [15:0] sample_i0,
     (* X_INTERFACE_IGNORE = "true" *) input wire signed [15:0] sample_q0,
@@ -32,6 +34,8 @@ module gowinsdr_rx_chain (
     (* X_INTERFACE_IGNORE = "true" *) output wire decoded_valid,
     (* X_INTERFACE_IGNORE = "true" *) output wire signed [31:0] costas_frequency_word,
     (* X_INTERFACE_IGNORE = "true" *) output wire [31:0] costas_phase_word,
+    (* X_INTERFACE_IGNORE = "true" *) output wire costas_locked,
+    (* X_INTERFACE_IGNORE = "true" *) output wire costas_recovery,
     (* X_INTERFACE_IGNORE = "true" *) output wire signed [31:0] timing_step,
     (* X_INTERFACE_IGNORE = "true" *) output wire signed [34:0] timing_error
 );
@@ -39,6 +43,31 @@ module gowinsdr_rx_chain (
 wire rrc_valid;
 wire signed [15:0] rrc_i;
 wire signed [15:0] rrc_q;
+wire costas_signal_present;
+reg [15:0] sync_watchdog_count;
+reg force_costas_recovery;
+
+// A valid maximum-length packet produces frame_sync well inside this
+// interval.  If carrier lock persists without any packet sync, restart the
+// Costas acquisition so an unlucky false/bad state cannot live forever.
+always @(posedge clk) begin
+    if (!rst_n || !costas_locked) begin
+        sync_watchdog_count <= 16'd0;
+        force_costas_recovery <= 1'b0;
+    end else begin
+        force_costas_recovery <= 1'b0;
+        if (frame_sync) begin
+            sync_watchdog_count <= 16'd0;
+        end else if (costas_valid) begin
+            if (sync_watchdog_count == 16'hfffe) begin
+                sync_watchdog_count <= 16'd0;
+                force_costas_recovery <= 1'b1;
+            end else begin
+                sync_watchdog_count <= sync_watchdog_count + 1'b1;
+            end
+        end
+    end
+end
 
 rx_polyphase_decim4 u_decimator (
     .clk(clk), .rst_n(rst_n), .in_valid(sample_valid),
@@ -54,14 +83,18 @@ rx_matched_rrc u_matched_filter (
 );
 
 rx_costas_loop u_costas (
-    .clk(clk), .rst_n(rst_n), .in_valid(rrc_valid),
+    .clk(clk), .rst_n(rst_n), .force_recovery(force_costas_recovery),
+    .in_valid(rrc_valid),
     .in_i(rrc_i), .in_q(rrc_q),
     .out_valid(costas_valid), .out_i(costas_i), .out_q(costas_q),
-    .frequency_word(costas_frequency_word), .phase_word(costas_phase_word)
+    .frequency_word(costas_frequency_word), .phase_word(costas_phase_word),
+    .locked(costas_locked), .recovery_pulse(costas_recovery),
+    .signal_present(costas_signal_present)
 );
 
 rx_gardner_timing u_timing (
-    .clk(clk), .rst_n(rst_n), .in_valid(costas_valid),
+    .clk(clk), .rst_n(rst_n), .enable(costas_locked),
+    .frame_sync(frame_sync), .in_valid(costas_valid),
     .in_i(costas_i), .in_q(costas_q),
     .symbol_valid(symbol_valid), .symbol_i(symbol_i), .symbol_q(symbol_q),
     .timing_step(timing_step), .timing_error(timing_error)

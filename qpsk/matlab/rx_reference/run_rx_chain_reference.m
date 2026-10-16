@@ -234,10 +234,10 @@ end
 function out = rtl_fixed_model(adcI, adcQ, hDecim, hRrc, p)
 [out.decim_i, out.decim_q] = fixed_decimate4(adcI, adcQ, hDecim, p.coeff_fraction_bits);
 [out.rrc_i, out.rrc_q] = fixed_fir(out.decim_i, out.decim_q, hRrc, p.coeff_fraction_bits);
-[out.costas_i, out.costas_q, out.frequency_word, out.phase_word] = ...
+[out.costas_i, out.costas_q, out.frequency_word, out.phase_word, out.costas_locked] = ...
     fixed_costas(out.rrc_i, out.rrc_q, p);
 [out.symbol_i, out.symbol_q, out.timing_step, out.timing_error] = ...
-    fixed_gardner(out.costas_i, out.costas_q, p);
+    fixed_gardner(out.costas_i, out.costas_q, out.costas_locked, p);
 [out.decoded_value, out.decoded_bits] = fixed_diff_decode(out.symbol_i, out.symbol_q);
 end
 
@@ -286,11 +286,15 @@ x(x < -32768) = -32768;
 y = int16(x);
 end
 
-function [yoI,yoQ,freqLog,phaseLog] = fixed_costas(xi,xq,p)
+function [yoI,yoQ,freqLog,phaseLog,lockedLog] = fixed_costas(xi,xq,p)
 n = numel(xi);
 yoI = zeros(n,1,'int16'); yoQ = yoI;
 freqLog = zeros(n,1,'int32'); phaseLog = zeros(n,1,'uint32');
+lockedLog=false(n,1);
 frequency = int32(0); phase = uint32(0); errorReg=int16(0);
+metric=int32(0); unlockCount=0; lockGoodCount=0; cooldown=0; locked=false;
+signalAccumulator=int64(0); signalOnCount=0; signalOffCount=0;
+signalPresent=false;
 for k = 1:n
     phaseIndex = double(bitshift(phase,-24));
     ncoSin = int64(sin_lut_q15(phaseIndex));
@@ -304,20 +308,83 @@ for k = 1:n
     if mixI < 0, signedQ = -int64(mixQ); else, signedQ = int64(mixQ); end
     if mixQ < 0, signedI = -int64(mixI); else, signedI = int64(mixI); end
     rawError = signedQ-signedI;
-    % RTL uses a fixed nominal detector magnitude of 8192.  Since the loop
-    % error is Q1.15, this is exactly rawError*2^(15-13) = rawError*4.
-    % Avoiding sample-by-sample division keeps the feedback path at one
-    % sample/clock and makes the implementation timing-friendly.
-    normalizedError=sat16(bitshift(rawError,p.costas.error_fraction_bits-13));
+    magnitude=abs(int64(mixI))+abs(int64(mixQ));
+    exponent=nextpow2(max(double(magnitude),p.costas.magnitude_floor));
+    normalizedError=sat16(bitshift(rawError,p.costas.error_fraction_bits-exponent));
+
+    % Match the RTL L1-magnitude IIR and hysteretic signal qualifier.  A
+    % sample that asserts signalPresent still holds the loop in reset; loop
+    % acquisition begins on the following valid sample (nonblocking RTL
+    % assignment semantics).
+    signalAccumulator=signalAccumulator-bitshift(signalAccumulator, ...
+        -p.costas.signal_average_shift)+magnitude;
+    oldSignalPresent=signalPresent;
+    if ~oldSignalPresent
+        signalOffCount=0;
+        if signalAccumulator >= bitshift(int64(p.costas.signal_on_magnitude), ...
+                p.costas.signal_average_shift)
+            signalOnCount=min(p.costas.signal_on_samples,signalOnCount+1);
+            if signalOnCount>=p.costas.signal_on_samples
+                signalPresent=true; signalOnCount=0;
+            end
+        else
+            signalOnCount=0;
+        end
+    else
+        signalOnCount=0;
+        if signalAccumulator < bitshift(int64(p.costas.signal_off_magnitude), ...
+                p.costas.signal_average_shift)
+            signalOffCount=min(p.costas.signal_off_samples,signalOffCount+1);
+            if signalOffCount>=p.costas.signal_off_samples
+                signalPresent=false; signalOffCount=0;
+            end
+        else
+            signalOffCount=0;
+        end
+    end
+    if ~signalPresent
+        frequency=int32(0); phase=uint32(0); errorReg=int16(0);
+        metric=int32(0); unlockCount=0; lockGoodCount=0; cooldown=0;
+        locked=false;
+        freqLog(k)=frequency; phaseLog(k)=phase; lockedLog(k)=locked;
+        continue;
+    end
     proportional = wrap_i32(bitshift(int64(errorReg)*int64(p.costas.kp_phase_word), ...
         -p.costas.error_fraction_bits));
     integralDelta = wrap_i32(bitshift(int64(errorReg)*int64(p.costas.ki_phase_word), ...
         -p.costas.error_fraction_bits));
 
     oldFrequency = frequency;
-    frequency = wrap_i32(int64(frequency)+int64(integralDelta));
-    phase = wrap_u32(int64(phase)+int64(oldFrequency)+int64(proportional));
+    candidate=int64(frequency)+int64(integralDelta);
+    candidate=min(max(candidate,-int64(p.costas.max_frequency_word)), ...
+        int64(p.costas.max_frequency_word));
+    frequency=int32(candidate);
+    phase=wrap_u32(int64(phase)+int64(oldFrequency)+int64(proportional));
+
+    absError=abs(int64(errorReg));
+    metric=int32(int64(metric)+bitshift(absError-int64(metric),-6));
+    if cooldown>0, cooldown=cooldown-1; end
+    if metric>p.costas.unlock_threshold_q15
+        unlockCount=min(255,unlockCount+1);
+        lockGoodCount=0;
+    else
+        unlockCount=max(0,unlockCount-1);
+        if metric<p.costas.lock_threshold_q15 && cooldown==0
+            lockGoodCount=min(p.costas.lock_samples,lockGoodCount+1);
+            if lockGoodCount>=p.costas.lock_samples && signalPresent
+                locked=true;
+            end
+        else
+            lockGoodCount=0;
+        end
+    end
+    if unlockCount>=p.costas.unlock_samples && cooldown==0
+        frequency=int32(0); phase=uint32(0); metric=int32(0);
+        unlockCount=0; lockGoodCount=0; cooldown=p.costas.recovery_cooldown;
+        locked=false;
+    end
     freqLog(k)=frequency; phaseLog(k)=phase;
+    lockedLog(k)=locked;
     errorReg=normalizedError;
 end
 end
@@ -333,7 +400,7 @@ switch quadrant
 end
 end
 
-function [soI,soQ,stepLog,errorLog] = fixed_gardner(xi,xq,p)
+function [soI,soQ,stepLog,errorLog] = fixed_gardner(xi,xq,costasLocked,p)
 phase = uint32(0); step = int32(p.gardner.nominal_half_step);
 halfToggle = false; warmup = uint8(0);
 earlyI=int16(0); earlyQ=int16(0); middleI=int16(0); middleQ=int16(0);
@@ -343,21 +410,36 @@ pending=false; pendingMu=uint16(0);
 pipeValid=false(4,1); pipeI=zeros(4,1,'int16'); pipeQ=zeros(4,1,'int16');
 soI=int16([]); soQ=int16([]); stepLog=int32([]); errorLog=int64([]);
 for k=1:numel(xi)
+    if ~costasLocked(k)
+        phase=uint32(0); step=int32(p.gardner.nominal_half_step);
+        halfToggle=false; warmup=uint8(0);
+        earlyI=int16(0); earlyQ=int16(0); middleI=int16(0); middleQ=int16(0);
+        previousErrorQ15=int16(0);
+        delayI(:)=0; delayQ(:)=0; pending=false; pendingMu=uint16(0);
+        pipeValid(:)=false; pipeI(:)=0; pipeQ(:)=0;
+        continue;
+    end
     oldStep=step;
     if pipeValid(1)
         interpI=pipeI(1); interpQ=pipeQ(1);
         deltaI=int64(interpI)-int64(earlyI); deltaQ=int64(interpQ)-int64(earlyQ);
         err=int64(middleI)*deltaI + int64(middleQ)*deltaQ;
+        magnitude=max([abs(int64(earlyI))+abs(int64(earlyQ)), ...
+            abs(int64(middleI))+abs(int64(middleQ)), ...
+            abs(int64(interpI))+abs(int64(interpQ))]);
         oldWarmup=warmup;
         earlyI=middleI; earlyQ=middleQ; middleI=interpI; middleQ=interpQ;
         if warmup ~= 7, warmup=warmup+1; end
         if ~halfToggle && oldWarmup >= 2
-            errorQ15=sat16(bitshift(err,-p.gardner.error_shift));
+            exponent=nextpow2(max(double(magnitude),p.gardner.magnitude_floor));
+            errorQ15=sat16(bitshift(err,14-2*exponent));
             proportionalDelta=int64(p.gardner.kp_step_word)* ...
                 (int64(errorQ15)-int64(previousErrorQ15));
             integralDelta=int64(p.gardner.ki_step_word)*int64(errorQ15);
             loopDelta=bitshift(proportionalDelta+integralDelta,-15);
-            step=wrap_i32(int64(step)+loopDelta);
+            candidate=int64(step)+loopDelta;
+            step=int32(min(max(candidate,int64(p.gardner.min_half_step)), ...
+                int64(p.gardner.max_half_step)));
             previousErrorQ15=errorQ15;
             soI(end+1,1)=interpI; soQ(end+1,1)=interpQ; %#ok<AGROW>
             stepLog(end+1,1)=step; errorLog(end+1,1)=err; %#ok<AGROW>
@@ -398,15 +480,21 @@ for flush=1:4
         interpI=pipeI(1); interpQ=pipeQ(1);
         deltaI=int64(interpI)-int64(earlyI); deltaQ=int64(interpQ)-int64(earlyQ);
         err=int64(middleI)*deltaI + int64(middleQ)*deltaQ;
+        magnitude=max([abs(int64(earlyI))+abs(int64(earlyQ)), ...
+            abs(int64(middleI))+abs(int64(middleQ)), ...
+            abs(int64(interpI))+abs(int64(interpQ))]);
         oldWarmup=warmup;
         earlyI=middleI; earlyQ=middleQ; middleI=interpI; middleQ=interpQ;
         if warmup ~= 7, warmup=warmup+1; end
         if ~halfToggle && oldWarmup >= 2
-            errorQ15=sat16(bitshift(err,-p.gardner.error_shift));
+            exponent=nextpow2(max(double(magnitude),p.gardner.magnitude_floor));
+            errorQ15=sat16(bitshift(err,14-2*exponent));
             proportionalDelta=int64(p.gardner.kp_step_word)* ...
                 (int64(errorQ15)-int64(previousErrorQ15));
             integralDelta=int64(p.gardner.ki_step_word)*int64(errorQ15);
-            step=wrap_i32(int64(step)+bitshift(proportionalDelta+integralDelta,-15));
+            candidate=int64(step)+bitshift(proportionalDelta+integralDelta,-15);
+            step=int32(min(max(candidate,int64(p.gardner.min_half_step)), ...
+                int64(p.gardner.max_half_step)));
             previousErrorQ15=errorQ15;
             soI(end+1,1)=interpI; soQ(end+1,1)=interpQ; %#ok<AGROW>
             stepLog(end+1,1)=step; errorLog(end+1,1)=err; %#ok<AGROW>

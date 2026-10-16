@@ -141,13 +141,29 @@ p.costas.kp_phase_word = int32(19059814);
 p.costas.ki_phase_word = int32(269587);
 p.costas.error_fraction_bits = 15;
 p.costas.nominal_magnitude_bits = 13; % |I|+|Q| ~= 8192; RTL implements <<2
+p.costas.max_frequency_word = int32(17476267); % +/-250 kHz at 61.44 MSPS
+p.costas.magnitude_floor = 16;
+p.costas.signal_average_shift = 5;
+p.costas.signal_on_magnitude = 16;
+p.costas.signal_off_magnitude = 10;
+p.costas.signal_on_samples = 64;
+p.costas.signal_off_samples = 128;
+p.costas.lock_threshold_q15 = int32(7864);
+p.costas.unlock_threshold_q15 = int32(9175);
+p.costas.lock_samples = 256;
+p.costas.unlock_samples = 128;
+p.costas.recovery_cooldown = 512;
 
 p.gardner.nominal_half_step = uint32(715827883); % 2^32/6
 p.gardner.half_symbol_samples = uint32(p.sps_pl/2);
 % GoWinSDR loop-filter form: w[n+1]=w[n]+Kp*(e[n]-e[n-1])+Ki*e[n].
 % Gains use the same zeta/BnTs design point as the carrier loop, converted
 % into half-symbol NCO phase-word units. Detector error is signed Q1.15.
-p.gardner.error_shift = 11;       % raw amplitude^2 error -> Q1.15
-p.gardner.kp_step_word = int32(19959391);
-p.gardner.ki_step_word = int32(282311);
+p.gardner.magnitude_floor = 16;
+p.gardner.min_half_step = int32(681740840); % 2^32/6.30
+p.gardner.max_half_step = int32(753503035); % 2^32/5.70
+% Gain magnitude is converted from half-period units into NCO step units;
+% the accumulator/Farrow convention supplies the matching detector polarity.
+p.gardner.kp_step_word = int32(7158279);
+p.gardner.ki_step_word = int32(95444);
 end

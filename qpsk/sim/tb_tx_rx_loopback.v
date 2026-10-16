@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
 
 module tb_tx_rx_loopback;
-localparam SYMBOLS=512;
+localparam SYMBOLS=1024;
 
 reg clk=0;
 reg rst_n=0;
@@ -21,6 +21,7 @@ wire symbol_valid;
 wire signed [15:0] symbol_i,symbol_q;
 wire signed [31:0] frequency_word;
 wire [31:0] phase_word;
+wire costas_locked;
 wire signed [31:0] timing_step;
 wire signed [34:0] timing_error;
 
@@ -52,7 +53,7 @@ gowinsdr_tx_chain u_tx (
 );
 
 gowinsdr_rx_chain u_rx (
-    .clk(clk),.rst_n(rst_n),.sample_valid(tx_valid),
+    .clk(clk),.rst_n(rst_n),.frame_sync(1'b0),.sample_valid(tx_valid),
     .sample_i0(tx_data[15:0]),.sample_q0(tx_data[31:16]),
     .sample_i1(tx_data[47:32]),.sample_q1(tx_data[63:48]),
     .sample_i2(tx_data[79:64]),.sample_q2(tx_data[95:80]),
@@ -62,6 +63,7 @@ gowinsdr_rx_chain u_rx (
     .symbol_valid(symbol_valid),.symbol_i(symbol_i),.symbol_q(symbol_q),
     .decoded_data(decoded_data),.decoded_valid(decoded_valid),
     .costas_frequency_word(frequency_word),.costas_phase_word(phase_word),
+    .costas_locked(costas_locked),.costas_recovery(),
     .timing_step(timing_step),.timing_error(timing_error)
 );
 
@@ -69,19 +71,26 @@ initial begin
     repeat(8) @(posedge clk);
     @(negedge clk);
     rst_n=1;
-    repeat(8500) @(posedge clk);
+    // The repaired receiver deliberately holds Gardner reset until Costas
+    // has met its continuous lock criterion, so allow acquisition plus more
+    // than 300 post-lock symbols before evaluating the loopback.
+    repeat(15000) @(posedge clk);
 
     best_errors=1000000;
     best_lag=-1;
-    for (lag=0;lag<=80;lag=lag+1) begin
+    // Lock gating discards pre-lock decisions, so received[0] corresponds
+    // to sent[lag], not the reverse. Search that acquisition offset.
+    for (lag=0;lag<=400;lag=lag+1) begin
         direct_errors=0;
         swap_errors=0;
         compare_count=0;
-        for (k=32;k<SYMBOLS-64;k=k+1) begin
-            if ((k+lag)<received_count) begin
-                if (received[k+lag] !== sent[k]) direct_errors=direct_errors+1;
-                swapped={received[k+lag][0],received[k+lag][1]};
-                if (swapped !== sent[k]) swap_errors=swap_errors+1;
+        // Ignore carrier/timing acquisition; a framed link consumes this
+        // interval with its preamble and begins payload comparison afterward.
+        for (k=160;k<received_count-32;k=k+1) begin
+            if ((k+lag)<SYMBOLS) begin
+                if (received[k] !== sent[k+lag]) direct_errors=direct_errors+1;
+                swapped={received[k][0],received[k][1]};
+                if (swapped !== sent[k+lag]) swap_errors=swap_errors+1;
                 compare_count=compare_count+1;
             end
         end
@@ -95,8 +104,8 @@ initial begin
         end
     end
 
-    $display("LOOPBACK sent=%0d decoded=%0d best_lag=%0d errors=%0d",
-        sent_count,received_count,best_lag,best_errors);
+    $display("LOOPBACK sent=%0d decoded=%0d locked=%0d best_lag=%0d errors=%0d",
+        sent_count,received_count,costas_locked,best_lag,best_errors);
     if (best_errors==0)
         $display("PASS: RTL TX -> RTL RX differential-QPSK loopback decoded without errors");
     else

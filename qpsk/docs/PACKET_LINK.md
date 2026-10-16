@@ -22,6 +22,14 @@ payload length into the header. The RX deframer buffers one received frame and
 only releases it to S2MM after CRC32 passes. The PS therefore programs one MM2S
 transfer and one S2MM transfer of the same expected payload size.
 
+The QPSK Costas loop can reacquire at a phase differing by 90 or 270 degrees.
+With the GoWinSDR-compatible per-axis differential coding this appears as an
+exchange of the two bits in every recovered dibit. The RX deframer searches for
+both the normal sync word `EB 90 CA D3` and its bit-exchanged form
+`D7 60 C5 E3`. A transformed match asserts `iq_swapped` and exchanges all
+following header, payload and FCS dibits before CRC checking. Thus reconnecting
+the RF path does not require software-side bit remapping.
+
 ## Intended BD structure
 
 `DDR -> axi_dma_qpsk/MM2S -> axis_clock_converter -> axis_tx_framer -> gowinsdr_tx_chain -> axis_broadcaster -> RFDC DAC`
@@ -62,9 +70,21 @@ the framed waveform.
 ## Verification status
 
 - AXI packet-only simulation: payload, scrambling, descrambling, header CRC and
-  CRC32 agree end to end.
+  CRC32 agree end to end for both normal and I/Q-bit-swapped reception.
 - Full PHY simulation: DMA payload -> frame -> QPSK TX/RX -> deframe -> DMA
   payload passes byte-for-byte.
+- `matlab/generate_packet_iq_scenarios.m` generates the complete on-air packet,
+  RRC waveform and four-complex-samples-per-clock input independently of the
+  RTL transmitter. `sim/tb_packet_iq_injection.v` injects these samples directly
+  into the RX chain, bypassing RFDC/DDC and both DMAs. Baseline, 90-degree phase
+  ambiguity, and the combined 0.55-rad phase + 18-kHz CFO + 1.9-sample timing
+  offset + 35-ppm clock error + 20-dB SNR cases all recover the complete 64-byte
+  payload with a valid header and CRC32. A fourth case with mean Costas-output
+  `|I|+|Q|=20` also passes the complete frame and CRC checks.
+- The deframer's `sync_found` pulse switches Gardner from acquisition mode to a
+  narrow, bounded packet-tracking mode. This is the fix for the intermittent
+  one-dibit slip that produced a valid sync word followed by `header_error` in
+  the board captures.
 - Vivado 2022.2 synthesis and implementation for `xczu47dr-ffve1156-2-i`:
   complete with zero errors and zero critical warnings. Routed utilization is
   32,180 LUTs, 30,510 registers, 128.5 BRAM tiles and 346 DSPs for the complete

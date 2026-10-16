@@ -1,0 +1,9 @@
+profile=combined
+phase_rad=0.55
+cfo_hz=18000
+amplitude_scale=1
+fractional_delay_samples=1.9
+sample_clock_ppm=35
+snr_db=20
+payload_bytes=64
+input_clocks=14784

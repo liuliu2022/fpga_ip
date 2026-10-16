@@ -30,7 +30,10 @@ module axis_rx_deframer #(
     output reg         header_error,
     output reg         crc_error,
     output reg         frame_good,
-    output reg [15:0]  frame_length
+    output reg [15:0]  frame_length,
+    // High for a frame whose recovered dibit bit order was exchanged by a
+    // 90/270-degree QPSK Costas ambiguity. Kept visible for board ILA.
+    output reg         iq_swapped
 );
 
 localparam [1:0] ST_SEARCH = 2'd0;
@@ -117,8 +120,16 @@ function [6:0] scrambler_next2;
 endfunction
 
 wire [31:0] shifted_sync = {sync_shift[29:0], s_dibit};
+// Per-axis differential decoding removes polarity inversion, while a 90/270
+// degree Costas solution exchanges the two recovered bits. Exchanging every
+// dibit's two bits transforms EB90CAD3 into D760C5E3.
+wire normal_sync_match  = (shifted_sync == 32'hEB90CAD3);
+wire swapped_sync_match = (shifted_sync == 32'hD760C5E3);
+wire [1:0] resolved_dibit = iq_swapped ?
+                            {s_dibit[0], s_dibit[1]} : s_dibit;
 wire [1:0] clean_dibit = (state == ST_BODY) ?
-                         descramble_dibit(s_dibit, scrambler_state) : s_dibit;
+                         descramble_dibit(resolved_dibit, scrambler_state) :
+                         resolved_dibit;
 
 always @(posedge clk) begin
     if (!rst_n) begin
@@ -145,6 +156,7 @@ always @(posedge clk) begin
         crc_error         <= 1'b0;
         frame_good        <= 1'b0;
         frame_length      <= 16'd0;
+        iq_swapped        <= 1'b0;
         fcs_byte0         <= 8'd0;
         fcs_byte1         <= 8'd0;
         fcs_byte2         <= 8'd0;
@@ -170,9 +182,10 @@ always @(posedge clk) begin
             m_axis_tvalid <= 1'b0;
             if (s_dibit_valid) begin
                 sync_shift <= shifted_sync;
-                if (shifted_sync == 32'hEB90CAD3) begin
+                if (normal_sync_match || swapped_sync_match) begin
                     state            <= ST_HEADER;
                     sync_found       <= 1'b1;
+                    iq_swapped       <= swapped_sync_match;
                     dibit_count      <= 2'd0;
                     byte_shift       <= 6'd0;
                     header_index     <= 2'd0;
